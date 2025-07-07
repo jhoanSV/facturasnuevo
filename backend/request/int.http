@@ -1,0 +1,20 @@
+@api = http://192.168.1.110:5000/
+
+GET {{api}}int/clientlist
+
+###
+GET {{api}}int/routeslist
+
+###
+GET {{api}}int/advisorslist
+
+###
+GET {{api}}int/getproductlist
+
+###
+POST {{api}}int/othersupplier
+Content-Type: application/json
+
+{
+  "Cod": "1"
+}
