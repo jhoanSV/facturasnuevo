@@ -1,4 +1,4 @@
-@api = http://192.168.1.110:5000/
+@api = http://192.168.1.111:5000/
 
 GET {{api}}int/clientlist
 
@@ -17,4 +17,15 @@ Content-Type: application/json
 
 {
   "Cod": "1"
+}
+
+###
+GET {{api}}int/enteredlist
+
+###
+POST {{api}}int/pppurchase
+Content-Type: application/json
+
+{
+  "Consecutivo": "2178"
 }
