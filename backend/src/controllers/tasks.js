@@ -340,7 +340,7 @@ export const postUpdateClient = async(req,res)=>{
 
         } else {
             const [NewEData] = await connection.query(`DELETE FROM
-                                                            clientes
+                                                            resoluciones
                                                         WHERE
                                                             Cod = ?`,[req.body.Cod])
         }
@@ -770,7 +770,7 @@ export const quiantityAndDisponible = async(req,res)=>{
         res.json(rows)
         connection.end()
     } catch (error) {
-        console.log('Error-postOtherSupplier: ', error)
+        console.log('Error-quiantityAndDisponible: ', error)
     }
 };
 
@@ -1802,6 +1802,396 @@ export const postNewAlias = async(req,res)=>{
     } catch (error) {
         console.log('Error-postNewAlias: ', error)
         res.status(500).json({sucess: false, error: error});
+    } finally {
+        connection.end();
+    }
+};
+
+export const getOrderHeader = async(req,res)=>{
+    try {
+        const connection = await connect()
+        const [rows] = await connection.query(`SELECT
+                                                    te.NDePedido,
+                                                    cli.Cod,
+                                                    cli.Ferreteria,
+                                                    cli.Nit,
+                                                    cli.Contacto,
+                                                    cli.Direccion,
+                                                    cli.Telefono,
+                                                    cli.Cel,
+                                                    cli.Email,
+                                                    cli.Barrio,
+                                                    cli.Pos,
+                                                    te.CodColaborador,
+                                                    CONCAT(col.Nombre, ' ', col.Apellido) AS colaborador,
+                                                    te.Estado,
+                                                    te.FechaDeEntrega,
+                                                    te.FechaFactura,
+                                                    te.ProcesoDelPedido,
+                                                    te.FechaVencimiento,
+                                                    te.TipoDePago,
+                                                    te.TieneIva,
+                                                    te.NotaVenta,
+                                                    te.NotaEntrega,
+                                                    te.VECommerce
+                                                FROM
+                                                    tabladeestados AS te
+                                                LEFT JOIN
+                                                    clientes AS cli ON te.CodCliente = cli.Cod
+                                                LEFT JOIN
+                                                    colaboradores AS col ON te.CodColaborador = col.Cod
+                                                WHERE
+                                                    te.NDePedido = ?`, [req.body.NDePedido])
+        res.json(rows)
+        connection.end()
+    } catch (error) {
+        console.log('Error-getOrderHeader: ', error)
+    }
+};
+
+export const getOrderDetail = async(req,res)=>{
+    try {
+        const connection = await connect()
+        let query = ''
+        if (req.body.status === 'Ingresado'){
+            query = `SELECT
+                        ti.Cantidad AS Cantidad,
+                        ti.Codigo AS Codigo,
+                        pro.Descripcion,
+                        ti.VrUnitario,
+                        ti.Costo,
+                        pro.Iva
+                    FROM
+                        tabladeingresados AS ti
+                    LEFT JOIN
+                        productos AS pro ON ti.Codigo = pro.Cod
+                    WHERE
+                        ti.NDePedido = ?`
+        } else if (req.body.status === 'Cerrado') {
+            query = `SELECT
+                        sa.Cantidad,
+                        sa.Codigo,
+                        sa.Descipcion,
+                        sa.VrUnitario,
+                        sa.Costo
+                    FROM
+                        salidas AS sa
+                    WHERE
+                        sa.NDePedido = ?`
+        } else {
+            query = `SELECT
+                        flu.Cantidad AS Cantidad,
+                        flu.Codigo AS Codigo,
+                        pro.Descripcion AS Descripcion,
+                        flu.VrUnitario,
+                        flu.Costo,
+                        pro.Iva,
+                        pro.SubCategoria AS IDSubCategoria,
+                        subc.SubCategoria,
+                        pro.CodProovedor AS CodProveedor,
+                        prov.Proovedor AS Proveedor,
+                        flu.Incompleto AS Estado
+                    FROM
+                        flujodeestados AS flu
+                    LEFT JOIN
+                        productos AS pro ON pro.Cod = flu.Codigo
+                    LEFT JOIN
+                        proovedores AS prov ON prov.Cod = pro.CodProovedor
+                    LEFT JOIN
+                        subcategorias AS subc ON subc.IDSubCategoria = pro.SubCategoria
+                    WHERE
+                        flu.NDePedido = ?`
+        }
+        const data = [req.body.NDeFactura]
+        const [rows] = await connection.query(query, data)
+        res.json(rows)
+        connection.end()
+    } catch (error) {
+        console.log('Error-getOrderDetail: ', error)
+    }
+};
+
+export const updateOrder = async(req,res)=>{
+    const connection = await connect()
+    try {
+        console.log(req.body)
+        if (req.body.Estado === 'Ingresado'){
+            const deleteData = await connection.query(`
+                DELETE FROM
+                    tabladeingresados
+                WHERE
+                    NDePedido = ?
+                `,[req.body.NDePedido])
+            const query = `INSERT INTO
+                        tabladeingresados
+                    VALUES
+                        ${req.body.Order.map(() => '(?,?,?,?,?)').join(', ')}
+                    `
+            const data = req.body.Order.flatMap(product => [
+                req.body.NDePedido,
+                product.Cantidad,
+                product.Codigo,
+                product.VrUnitario,
+                product.Costo
+            ]);
+            const ActualizarEstado = await connection.query(`UPDATE
+                                                                    tabladeestados
+                                                                SET 
+                                                                    FechaDeEstado = ?,
+                                                                    NotaVenta = ?,
+                                                                    NotaEntrega = ?,
+                                                                    TieneIva = ?
+                                                                WHERE
+                                                                    NDePedido = ?`, [req.body.Fecha,
+                                                                                     req.body.NotaVenta,
+                                                                                     req.body.NotaEntrega,
+                                                                                     req.body.Iva,
+                                                                                     req.body.NDePedido])
+            const [rows] = await connection.query(query, data)
+            res.status(200).json({sucess: true, error: ''})
+        } else {
+            const [deleteData] = await connection.query(`
+                DELETE FROM
+                    flujodeestados
+                WHERE
+                    NDePedido = ?
+                `,[req.body.NDePedido])
+            const query = `INSERT INTO
+                            flujodeestados
+                        VALUES
+                            ${req.body.Order.map(() => '(?,?,?,?,?,?,?)').join(', ')}
+                        `
+            const data = req.body.Order.flatMap(product => [
+                req.body.NDePedido,
+                product.Cantidad,
+                product.Codigo,
+                product.VrUnitario,
+                product.Costo,
+                req.body.Hora,
+                product.Estado
+            ]);
+            const [ActualizarEstado] = await connection.query(`UPDATE
+                                                                    tabladeestados
+                                                                SET 
+                                                                    Estado = 'Verificado',
+                                                                    FechaDeEstado = ?,
+                                                                    NotaVenta = ?,
+                                                                    NotaEntrega = ?,
+                                                                    TieneIva = ?,
+                                                                    ProcesoDelPedido = ?
+                                                                WHERE
+                                                                    NDePedido = ?`, [req.body.Fecha,
+                                                                                    req.body.NotaVenta,
+                                                                                    req.body.NotaEntrega,
+                                                                                    req.body.Iva,
+                                                                                    req.body.Impreso,
+                                                                                    req.body.NDePedido])
+            const [rows] = await connection.query(query, data)
+            res.status(200).json({sucess: true, error: ''})
+        }
+        connection.end()
+    } catch (error) {
+        console.log('Error-updateOrder: ', error)
+        res.status(500).json({sucess: false, error: error})
+    } finally {
+        connection.end();
+    }
+};
+
+export const postCloseOrder = async(req,res)=>{
+    const connection = await connect()
+    try {
+        //Introduce the data into the table salidas
+        const EnvioASalidas = `INSERT INTO
+                                    salidas
+                                VALUES ${req.body.Order.map(() => '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').join(', ')}
+                                `
+        const EnvioASalidasData = req.body.Order.flatMap(product => [
+                                                        req.body.NDePedido,
+                                                        product.Cantidad,
+                                                        product.Codigo,
+                                                        product.Descripcion,
+                                                        product.VrUnitario,
+                                                        product.Costo,
+                                                        product.IDSubCategoria,
+                                                        product.SubCategoria,
+                                                        product.CodProveedor,
+                                                        product.Proveedor,
+                                                        req.body.CodCliente,
+                                                        req.body.Cliente,
+                                                        req.body.CodColaborador,
+                                                        req.body.Colaborador,
+                                                        req.body.FechaDeIngreso,
+                                                        product.Iva,
+                                                        req.body.CodResponsable,
+                                                        req.body.Responsable
+                                                    ]);
+        const [rows] = await connection.query(EnvioASalidas, EnvioASalidasData)
+        //updte the table tabladeestados
+        const [States] = await connection.query(`UPDATE
+                                                    tabladeestados AS te
+                                                SET
+                                                    te.Estado = 'Cerrado',
+                                                    te.ProcesoDelPedido = '',
+                                                    te.FechaDeEstado = ?
+                                                WHERE
+                                                    te.NDePedido = ?`, [req.body.Fecha, req.body.NDePedido])
+        //Insert the order to the pos if the client has it
+        if (req.body.ClientPos === 1) {
+            //To the header purchase POS
+            const [toPurchasestable] = await connection.query(`
+                                                            INSERT INTO BD_Pos.cabeceracompras (
+                                                                    IdFerreteria,
+                                                                    ConInterno,
+                                                                    NPreFactura,
+                                                                    FacturaElectronica,
+                                                                    Estado,
+                                                                    Fecha
+                                                                )
+                                                                SELECT 
+                                                                    ? AS CodCliente,
+                                                                    COALESCE(MAX(ConInterno), 0) + 1 AS ConInterno,
+                                                                    ? AS NDePedido,
+                                                                    ? AS FacturaElectronica,
+                                                                    ? AS Estado,
+                                                                    ? AS Fecha
+                                                                FROM
+                                                                    BD_Pos.cabeceracompras
+                                                                WHERE
+                                                                    IdFerreteria = ?
+                                                                                                                    `, [
+                                                            req.body.CodCliente,
+                                                            req.body.NDePedido,
+                                                            '',
+                                                            'Por ingresar',
+                                                            req.body.FechaDeIngreso,
+                                                            req.body.CodCliente // <- este es para el WHERE IdFerreteria = ?
+                                                        ]);
+            const toComprasPorIngresar =  `INSERT INTO
+                                                BD_Pos.comprasporingresar
+                                            VALUES ${req.body.Order.map(() => '(?,?,?,?,?,?)').join(', ')}
+                                            `
+            const toComprasPorIngresarData = req.body.Order.flatMap(product => [
+                                                req.body.CodCliente,
+                                                req.body.NDePedido,
+                                                product.Cantidad,
+                                                product.Codigo,
+                                                product.VrUnitario,
+                                                0
+                                            ]);
+            const [toComprasPI] = await connection.query(toComprasPorIngresar, toComprasPorIngresarData)
+        }
+
+        const [DeteleFDeEstados] = await connection.query(`DELETE FROM
+                                                                flujodeestados
+                                                            WHERE
+                                                                NDePedido = ?`, [req.body.NDePedido])
+
+
+        res.status(200).json({sucess: true, error: ''})
+    } catch (error) {
+        console.log('Error-updateOrder: ', error)
+        res.status(500).json({sucess: false, error: error})
+    } finally {
+        connection.end();
+    }
+};
+
+export const postAnuul = async(req,res)=>{
+    const connection = await connect()
+    try {
+        //Introduce the data into the table salidas
+        const [States] = await connection.query(`UPDATE
+                                                    tabladeestados AS te
+                                                SET
+                                                    te.Estado = 'Anulado',
+                                                    te.ProcesoDelPedido = '',
+                                                    te.FechaDeEstado = ?
+                                                WHERE
+                                                    te.NDePedido = ?`, [req.body.Fecha, req.body.NDePedido])
+        res.status(200).json({sucess: true, error: ''})
+    } catch (error) {
+        console.log('Error-updateOrder: ', error)
+        res.status(500).json({sucess: false, error: error})
+    } finally {
+        connection.end();
+    }
+};
+
+export const getWeekly = async(req,res)=>{
+    const connection = await connect()
+    try {
+        //Introduce the data into the table salidas
+        const [HeaderWeekly] = await connection.query(`SELECT
+                                                            cli.Ferreteria,
+                                                            cli.Barrio AS Barrio,
+                                                            cli.Ruta,
+                                                            ru.nombreRuta,
+                                                            te.FechaDeEntrega AS Fecha,
+                                                            DAYNAME(te.FechaDeEntrega) AS DiaSemana,
+                                                            YEARWEEK(FechaFactura, 1) AS AnioSemana,
+                                                            co.Nombre AS asesor,
+                                                            SUM(fe.cantidad*fe.VrUnitario) AS valor,
+                                                            te.NDePedido,
+                                                            te.ProcesoDelPedido,
+                                                            te.Estado,
+                                                            COUNT(fe.NDePedido) AS Nproductos,
+                                                            te.VECommerce
+                                                        FROM
+                                                            tabladeestados AS te
+                                                        JOIN	
+                                                            clientes AS cli ON cli.Cod = te.CodCliente
+                                                        JOIN
+                                                            colaboradores AS co ON co.Cod = cli.CodVendedor
+                                                        JOIN
+                                                            flujodeestados AS fe ON fe.NDePedido = te.NDePedido
+                                                        LEFT JOIN
+                                                            rutas AS ru ON ru.codRuta = cli.Ruta
+                                                        WHERE
+                                                            te.Estado <> 'Cerrado' AND te.Estado <> 'Anulado'
+                                                        GROUP BY
+                                                            te.NDePedido
+                                                    `)
+        const pedidos = HeaderWeekly.map(r => r.NDePedido);
+        if (pedidos.length === 0) {
+            return res.json([]); // nada que devolver si no hay pedidos
+        }
+        const [missingWeekly] = await connection.query(`SELECT 
+                                                            flu.NDePedido,                        
+                                                            flu.cantidad,
+                                                            flu.Codigo,
+                                                            p.Descripcion
+                                                        FROM
+                                                            flujodeestados AS flu 
+                                                        JOIN
+                                                            productos AS p ON flu.Codigo = p.Cod
+                                                        WHERE
+                                                            flu.NDePedido IN (?) AND flu.Incompleto = 1`,[pedidos])
+
+        // 4. Agrupamos missing por pedido
+        const missingMap = {};
+        missingWeekly.forEach(item => {
+            if (!missingMap[item.NDePedido]) {
+                missingMap[item.NDePedido] = [];
+            }
+            missingMap[item.NDePedido].push({
+                cantidad: item.cantidad,
+                codigo: item.Codigo,
+                descripcion: item.Descripcion
+            });
+        });
+
+        // 5. Añadimos Missing a cada header
+        const EnvioASalidasData = HeaderWeekly.map(order => ({
+            ...order,
+            Missing: missingMap[order.NDePedido] || [] // si no hay faltantes, array vacío
+        }));
+
+        res.json(EnvioASalidasData);
+        
+    } catch (error) {
+        console.log('Error-updateOrder: ', error)
+        res.status(500).json({sucess: false, error: error})
     } finally {
         connection.end();
     }

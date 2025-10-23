@@ -42,7 +42,13 @@ import {getClientList,
         postOntheRoute,
         getSpecificPurchase,
         getAliasList,
-        postNewAlias
+        postNewAlias,
+        getOrderHeader,
+        getOrderDetail,
+        updateOrder,
+        postCloseOrder,
+        postAnuul,
+        getWeekly,
  } from '../controllers/tasks';
 
 const router = Router();
@@ -105,5 +111,14 @@ router.post('/int/specificpurchase',getSpecificPurchase)
 //!Alias
 router.post('/int/aliaslist',getAliasList)
 router.post('/int/newalias',postNewAlias)
+
+router.post('/int/orderheader',getOrderHeader)
+router.post('/int/getorderdetail',getOrderDetail)
+router.post('/int/updateorder',updateOrder)
+
+router.post('/int/closeorder',postCloseOrder)
+router.post('/int/anuul',postAnuul)
+
+router.get('/int/weekly',getWeekly)
 
 export default router
