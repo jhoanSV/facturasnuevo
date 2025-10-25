@@ -254,7 +254,8 @@ export const postUpdateClient = async(req,res)=>{
                                                         Pos = ?,
                                                         Tipo = ?,
                                                         ResFiscal = ?,
-                                                        ElectronicPos = ?
+                                                        ElectronicPos = ?,
+                                                        Tipo = ?
                                                     Where
                                                         Cod = ?`,
                                                     [
@@ -277,6 +278,7 @@ export const postUpdateClient = async(req,res)=>{
                                                         req.body.TDocumento,
                                                         req.body.ResFiscal,
                                                         req.body.ElectronicPos,
+                                                        req.body.Tipo === 'Cedula'? 0: 1,
                                                         req.body.Cod])
         if (req.body.Pos && req.body.ElectronicPos) {
             const [NewEData] = await connection.query(`INSERT INTO resoluciones 
@@ -339,10 +341,8 @@ export const postUpdateClient = async(req,res)=>{
                                                         req.body.Clave])
 
         } else {
-            const [NewEData] = await connection.query(`DELETE FROM
-                                                            resoluciones
-                                                        WHERE
-                                                            Cod = ?`,[req.body.Cod])
+            const [NewEData] = await connection.query(`DELETE FROM resoluciones
+                                                        WHERE IdFerreteria = ?`,[req.body.Cod])
         }
 
         res.status(200).json({sucess: true, error: ''})
@@ -2192,6 +2192,75 @@ export const getWeekly = async(req,res)=>{
     } catch (error) {
         console.log('Error-updateOrder: ', error)
         res.status(500).json({sucess: false, error: error})
+    } finally {
+        connection.end();
+    }
+};
+
+//! Sales
+export const postNewSale = async(req,res)=>{
+    const connection = await connect()
+    try {
+        //Introduce the data into the table salidas
+        const [consecutivo] = await connection.query(`SELECT
+                                                            MAX(NDePedido)+1 As Con
+                                                        FROM
+                                                            tabladeestados`)
+        console.log('consecutivo[0].Con', consecutivo[0].Con)
+        const [HeaderSale] = await connection.query(`
+            INSERT INTO tabladeestados VALUES (
+                ?,
+                ?,
+                ?,
+                ?,
+                'Ingresado',
+                ?,
+                ?,
+                '',
+                ?,
+                ?,
+                ?,
+                0,
+                ?,
+                '',
+                '0')
+            `, [consecutivo[0].Con,
+                req.body.CodCliente,
+                req.body.FechaFactura,
+                req.body.TPago,
+                req.body.FechaFactura,
+                req.body.FEntrega,
+                req.body.CodColaborador,
+                req.body.Iva? 1: 0,
+                req.body.FVencimiento,
+                req.body.Nota])
+
+        if (req.body.List.length > 0) {
+            const EntranseList = `
+            INSERT INTO
+                    tabladeingresados (
+                                NDePedido,
+                                Cantidad,
+                                Codigo,
+                                VrUnitario,
+                                Costo
+                            )
+                VALUES ${req.body.List.map(() => '(?,?,?,?,?)').join(', ')}
+            `;
+    
+            const EntranseListValues = req.body.List.flatMap(product => [
+                consecutivo[0].Con,
+                product.Cantidad,
+                product.Codigo,
+                product.VrUnitario,
+                product.Costo
+            ]);
+            await connection.execute(EntranseList, EntranseListValues);
+        }
+        res.status(200).json({sucess: true, error: consecutivo[0].Con})
+    } catch (error) {
+        console.log('Error-postNewSale: ', error)
+        res.status(500).json({sucess: false, error: JSON.stringify(error)})
     } finally {
         connection.end();
     }
