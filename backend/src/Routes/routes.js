@@ -49,6 +49,7 @@ import {getClientList,
         postCloseOrder,
         postAnuul,
         getWeekly,
+        postNewSale
  } from '../controllers/tasks';
 
 const router = Router();
@@ -96,6 +97,7 @@ router.post('/int/postmakepp', postMakePP)
 //!Sales
 router.get('/int/ppsales',getPPSales)
 router.get('/int/ppsalesbalances',getPPSalesBalances)
+router.post('/int/newsale',postNewSale)
 
 //!credit notes
 router.get('/int/creditnotes',getCreditNotes)

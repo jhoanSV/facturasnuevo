@@ -1,5 +1,5 @@
 #@api = http://192.168.101.8:5000/
-@api = http://54.161.22.104/
+@api = http://54.161.22.104:80/
 
 GET {{api}}int/clientlist
 
