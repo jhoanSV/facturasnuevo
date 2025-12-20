@@ -2763,7 +2763,7 @@ export const postAllowed = async(req,res)=>{
                                                                 WHERE p.IdUsuario = ? AND p.PermisoId = ?
                                                             ) THEN 1
                                                             ELSE 0
-                                                        END AS TienePermiso;`,[req.body.UserId, req.body.PermisoId])
+                                                        END AS TienePermiso;`,[req.body.UserID, req.body.PermisoId])
         res.status(200).json({sucess: true, error: consecutivo[0].TienePermiso})
     } catch (error) {
         console.log('Error-postAllowed: ', error)
