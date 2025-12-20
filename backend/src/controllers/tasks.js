@@ -541,14 +541,17 @@ export const getProductList = async(req,res)=>{
                                                 p.Iva,
                                                 p.Agotado,
                                                 pPos.SVenta,
-                                                pPos.Clase,
+                                                pPos.Clase AS IdClase,
+                                                clases.Nombre AS Clase,
                                                 p.ImgName,
                                                 IFNULL(CoorPages.Pag, '') AS Pagina,
                                                 IFNULL(CoorPages.xPosition, '') AS CoordenadaX,
                                                 IFNULL(CoorPages.yPosition, '') AS CoordenadaY,
                                                 p.Nota,
                                                 p.Detalle,
-                                                p.Grupo
+                                                p.Grupo,
+                                                IFNULL(des.Porcentaje, '') AS DesPorcentaje,
+                                                IFNULL(des.APartirDe, '') AS DesApartirDe
                                             FROM
                                                 BD_Pos.productos AS pPos
                                             LEFT JOIN
@@ -560,7 +563,11 @@ export const getProductList = async(req,res)=>{
                                             LEFT JOIN 
                                                 programaembd.subcategorias AS SubCat ON p.SubCategoria = SubCat.IDSubCategoria
                                             LEFT JOIN
-                                                programaembd.categoria AS Cat ON SubCat.IDCategoria = Cat.IDCategoria`)
+                                                programaembd.categoria AS Cat ON SubCat.IDCategoria = Cat.IDCategoria
+                                            LEFT JOIN
+                                                BD_Pos.clases AS clases ON clases.Id = pPos.Clase
+                                            LEFT JOIN
+						                        programaembd.descuentos AS des ON des.Cod = p.Cod`)
         res.json(rows)
         connection.end()
     } catch (error) {
@@ -586,6 +593,7 @@ export const getClasesList = async(req,res)=>{
 export const postUpdateProduct = async (req, res) => {
     const connection = await connect()
     try {
+        console.log(req.body)
         await connection.beginTransaction();
         // Actualizar el producto en la base de datos principal
         const updateProductSql = `
@@ -643,7 +651,8 @@ export const postUpdateProduct = async (req, res) => {
                                         SubCategoria = ?,
                                         Detalle = ?,
                                         Iva = ?,
-                                        SVenta = ?
+                                        SVenta = ?,
+                                        Clase = ?
                                     WHERE
                                         Consecutivo = ?`;
         const productValues1 = [
@@ -653,33 +662,177 @@ export const postUpdateProduct = async (req, res) => {
             req.body.Detalle,
             req.body.Iva,
             req.body.SVenta,
+            req.body.IdClase,
             req.body.Consecutivo
         ];
         await connection.execute(updateProductSql1, productValues1);
+        
+        //! Actualiza las coordenadas en el catálogo del producto
+        if (req.body.Pagina !== '' &&
+            req.body.CoordenadaX !== '' &&
+            req.body.CoordenadaY !== '') {
+            const updateCoordinatesPages = `INSERT INTO CoordinatesPages (
+                                                                        Consecutive,
+                                                                        Cod,
+                                                                        Pag,
+                                                                        xPosition,
+                                                                        yPosition)
+                                                        VALUES (?,?,?,?,?)
+                                                        ON DUPLICATE KEY UPDATE
+                                                            Pag = ?,
+                                                            xPosition = ?,
+                                                            yPosition = ?`
+            const coordinatesValues = [
+                req.body.Consecutivo,
+                req.body.Cod,
+                req.body.Pagina,
+                req.body.CoordenadaX,
+                req.body.CoordenadaY,
+                req.body.Pagina,         // para UPDATE
+                req.body.CoordenadaX,
+                req.body.CoordenadaY
+            ];
+            await connection.execute(updateCoordinatesPages, coordinatesValues);
+        }
+        //!Modifica el descuento sobre el producto.
+        if (req.body.Pdiscount !== 0 && req.body.Pdiscount !== ''){
+            const updateDiscounts = `INSERT INTO descuentos (
+                                                                Cod,
+                                                                Porcentaje,
+                                                                APartirDe
+                                                            )
+                                                            VALUES (?, ?, ?)
+                                                            ON DUPLICATE KEY UPDATE
+                                                                Porcentaje = VALUES(Porcentaje),
+                                                                APartirDe = VALUES(APartirDe)`
+            const discountsValues = [
+                req.body.Cod,
+                req.body.Pdiscount,
+                req.body.Ndiscount
+            ];
+            await connection.execute(updateDiscounts, discountsValues);
+        } else {
+            const [rows] = await connection.query(`DELETE FROM descuentos WHERE Cod = ?`,[req.body.Cod])
+        }
 
-        const updateCoordinatesPages = `INSERT INTO CoordinatesPages (
-                                                                    Consecutive,
-                                                                    Cod,
-                                                                    Pag,
-                                                                    xPosition,
-                                                                    yPosition)
-                                                    VALUES (?,?,?,?,?)
-                                                    ON DUPLICATE KEY UPDATE
-                                                        Pag = ?,
-                                                        xPosition = ?,
-                                                        yPosition = ?`
-        const coordinatesValues = [
-            req.body.Consecutivo,
-            req.body.Cod,
-            req.body.Pagina,
-            req.body.CoordenadaX,
-            req.body.CoordenadaY,
-            req.body.Pagina,         // para UPDATE
-            req.body.CoordenadaX,
-            req.body.CoordenadaY
-        ];
-        await connection.execute(updateCoordinatesPages, coordinatesValues);
+        //!Modifica la cantidad del producto
+        //Primero consulto la cantidad del producto.
+        const [rows] = await connection.query(`SELECT
+                                                    COALESCE(SUM(
+                                                        CASE 
+                                                            WHEN tipo = 'entrada' THEN Cantidad
+                                                            WHEN tipo = 'salida' THEN -Cantidad
+                                                            ELSE 0
+                                                        END
+                                                    ), 0) AS Cantidad
+                                                FROM (
+                                                    SELECT 'entrada' AS tipo, Cantidad FROM entradas WHERE Codigo = ?
+                                                    UNION ALL
+                                                    SELECT 'salida' AS tipo, Cantidad FROM salidas WHERE Codigo = ?
+                                                ) AS movimientos`,[req.body.Cod,req.body.Cod])
+        const NCantidad = Math.abs(rows[0].Cantidad - req.body.Cantidad)
+        console.log(req.body.Fecha)
+        if (Number(rows[0].Cantidad) > Number(req.body.Cantidad)) {
+            const [restar] = await connection.query(`INSERT INTO salidas (NDePedido,
+                                                                          Cantidad,
+                                                                          Codigo,
+                                                                          Descipción,
+                                                                          VrUnitario,
+                                                                          Costo,
+                                                                          IDSubCategoria,
+                                                                          SubCategoria,
+                                                                          CodProveedor,
+                                                                          Proveedor,
+                                                                          CodCliente,
+                                                                          Cliente,
+                                                                          CodColaborador,
+                                                                          Colaborador,
+                                                                          FechaDeIngreso,
+                                                                          TieneIVA,
+                                                                          CodResponsable,
+                                                                          Responsable,
+                                                                          Porcentaje,
+                                                                          APartirDe)
+                                                                    VALUES (?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?,
+                                                                            ?)`,
+                                                                    [0,
+                                                                     NCantidad,
+                                                                     req.body.Cod,
+                                                                     req.body.Descripcion,
+                                                                     0,
+                                                                     req.body.PCosto,
+                                                                     req.body.IdSubCategoria,
+                                                                     req.body.SubCategoria,
+                                                                     2,
+                                                                     'Arreglo de inventario',
+                                                                     0,
+                                                                     0,
+                                                                     req.body.CodResponsable,
+                                                                     req.body.Responsable,
+                                                                     req.body.Fecha,
+                                                                     req.body.Iva,
+                                                                     req.body.CodResponsable,
+                                                                     req.body.Responsable,
+                                                                     '0',
+                                                                     '0'])
+        } else if (Number(rows[0].Cantidad) < Number(req.body.Cantidad)){
+            const [sumar] = await connection.query(`INSERT INTO entradas (Consecutivo,
+                                                                        CodProveedor,
+                                                                        Proveedor,
+                                                                        Cantidad,
+                                                                        Codigo,
+                                                                        Descripción,
+                                                                        Costo,
+                                                                        CostoLP,
+                                                                        Fecha,
+                                                                        Iva,
+                                                                        CodResponsable,
+                                                                        Responsable)
+                                                            VALUES (?,
+                                                                    ?,
+                                                                    ?,
+                                                                    ?,
+                                                                    ?,
+                                                                    ?,
+                                                                    ?,
+                                                                    ?,
+                                                                    ?,
+                                                                    ?,
+                                                                    ?,
+                                                                    ?)`,
+                                                                   [0,
+                                                                    2,
+                                                                    'Arreglo de inventario',
+                                                                    NCantidad,
+                                                                    req.body.Cod,
+                                                                    req.body.Descripcion,
+                                                                    0,
+                                                                    req.body.PCosto,
+                                                                    req.body.Fecha,
+                                                                    req.body.Iva,
+                                                                    req.body.CodResponsable,
+                                                                    req.body.Responsable])
+        }
 
+        //!Modifica otros proveedores
         //Crea la lista de otros proveedores
         //primero elimina los datos previos
         const deteleotherSuppliers = `DELETE FROM
@@ -709,7 +862,7 @@ export const postUpdateProduct = async (req, res) => {
     } catch (error) {
         console.log(error);
         await connection.rollback();
-        res.status(500).json({sucess: false, error: error})
+        res.status(500).json({sucess: false, error: String(error)})
     } finally {
         await connection.end();
     }
@@ -777,11 +930,21 @@ export const quiantityAndDisponible = async(req,res)=>{
 export const postNewProduct = async (req, res) => {
     const connection = await connect()
     try {
+        console.log(req.body)
         await connection.beginTransaction();
         //! Nuevo producto en la base de datos POS
         const NewProductSqlPos = `
         INSERT INTO
             BD_Pos.productos
+            (IdFerreteria,
+            Cod,
+            Descripcion,
+            Clase,
+            SubCategoria,
+            Detalle,
+            Iva,
+            SVenta,
+            ImgName)
         VALUES
         (
             ?,
@@ -805,7 +968,7 @@ export const postNewProduct = async (req, res) => {
             req.body.SVenta,
             req.body.ImgNombre
         ];
-        await connection.execute(updateProductSql1, productValues1);
+        await connection.execute(NewProductSqlPos, productValuesPos);
         
         const [rows] = await connection.query(`SELECT
                                                     MAX(Consecutivo) AS Consecutivo
@@ -859,7 +1022,7 @@ export const postNewProduct = async (req, res) => {
             req.body.ImgNombre,
             req.body.Grupo
         ];
-        await connection.execute(updateProductSql, productValues);
+        await connection.execute(NewProductSql, productValues);
         
         //! Nuevas coordenadas en la base de datos Principal
         if (req.body.Pagina !== '' || 
@@ -888,8 +1051,23 @@ export const postNewProduct = async (req, res) => {
             await connection.execute(NewCoordinatesSql, CoordinatesValues);
         }
 
+        if (req.body.Pdiscount !== 0 && req.body.Pdiscount !== ''){
+            console.log('Entro en descuentos')
+            const updateDiscounts = `INSERT INTO descuentos (
+                                                            Cod,
+                                                            Porcentaje,
+                                                            APartirDe
+                                                            ) VALUES (?,?,?)`
+            const discountsValues = [
+                req.body.Cod,
+                req.body.Pdiscount,
+                req.body.Ndiscount
+            ];
+            await connection.execute(updateDiscounts, discountsValues);
+        }
+
         //! Para incertar en a tabla otrosProveedores
-        if (req.body.otrosProveedores.leng() > 0) {
+        if (req.body.otrosProveedores.length > 0) {
             const NewOtherSuppliers = `
                 INSERT INTO otrosproveedores (Cod, CodP, PCosto, Cantidad)
                 VALUES ${req.body.otrosProveedores.map(() => '(?, ?, ?, ?)').join(', ')}
@@ -909,7 +1087,7 @@ export const postNewProduct = async (req, res) => {
             if (req.body.Cantidad > 0) {
                 const NewEntradasSql = `
                 INSERT INTO
-                    CoordinatesPages
+                    entradas
                 VALUES
                 (
                     ?,
@@ -940,13 +1118,15 @@ export const postNewProduct = async (req, res) => {
                     req.body.CodResponsable,
                     req.body.Responsable
                 ];
-                //await connection.execute(NewEntradasSql, EntradasValues);
+                await connection.execute(NewEntradasSql, EntradasValues);
             } else {
                 const NewSalidasSql = `
                 INSERT INTO
-                    CoordinatesPages
+                    salidas
                 VALUES
                 (
+                    ?,
+                    ?,
                     ?,
                     ?,
                     ?,
@@ -973,20 +1153,22 @@ export const postNewProduct = async (req, res) => {
                     req.body.Fecha,
                     req.body.Iva,
                     req.body.CodResponsable,
-                    req.body.Responsable
+                    req.body.Responsable,
+                    '0',
+                    '0'
                 ];
-                //await connection.execute(NewSalidasSql, SalidasValues);
+                await connection.execute(NewSalidasSql, SalidasValues);
             }
         }
 
         //await connection.execute(NewOtherSuppliers, NewOtherSuppliersValues);
         // Confirmar la transacción
         await connection.commit();
-        res.status(200).json({ message: 'Transacción completada con éxito' });
+        res.status(200).json({sucess: true, error: ''})
     } catch (error) {
-        console.log(error);
+        console.log(error)
         await connection.rollback();
-        res.status(500).json(error);
+        res.status(500).json({sucess: false, error: String(error)})
     } finally {
         await connection.end();
     }
@@ -996,51 +1178,98 @@ export const quiantityProductList = async(req,res)=>{
     try {
         const connection = await connect()
         const [rows] = await connection.query(`SELECT
-                                                    p.Cod,
-                                                    p.Descripcion,
-                                                    p.EsUnidadOpaquete,
-                                                    Cat.Categoria,
-                                                    SubCat.IDCategoria,
-                                                    SubCat.SubCategoria,
-                                                    p.SubCategoria AS IdSubCategoria,
-                                                    p.CodProovedor,
-                                                    prov.Proovedor AS proveedor,
-                                                    p.PCosto,
-                                                    p.PVenta AS PventaContado,
-                                                    p.Pventa1 AS PVentaCredito,
-                                                    p.Pventa2 AS PVentaDistribuidor,
-                                                    p.Ubicación,
-                                                    p.Minimo,
-                                                    p.Maximo,
-                                                    p.Iva,
-                                                    p.Agotado,
-                                                    p.ImgName,
-                                                    p.Nota,
-                                                    p.Detalle,
-                                                    IFNULL(e.TotalEntrada, 0) - IFNULL(s.TotalSalida, 0) AS Cantidad
-                                                FROM
-                                                    productos AS p
-                                                LEFT JOIN proovedores AS prov ON p.CodProovedor = prov.Cod
-                                                LEFT JOIN subcategorias AS SubCat ON p.SubCategoria = SubCat.IDSubCategoria
-                                                LEFT JOIN categoria AS Cat ON SubCat.IDCategoria = Cat.IDCategoria
+                                                pPos.Consecutivo,
+                                                pPos.Cod,
+                                                pPos.Descripcion,
+                                                p.EsUnidadOpaquete,
+                                                Cat.Categoria,
+                                                SubCat.IDCategoria,
+                                                SubCat.SubCategoria,
+                                                p.SubCategoria AS IdSubCategoria,
+                                                p.CodProovedor,
+                                                prov.Proovedor AS proveedor,
+                                                p.PCosto,
+                                                p.PVenta AS PventaContado,
+                                                p.Pventa1 AS PVentaCredito,
+                                                p.Pventa2 AS PVentaDistribuidor,
+                                                p.Ubicación,
+                                                p.Minimo,
+                                                p.Maximo,
+                                                p.Iva,
+                                                p.Agotado,
+                                                pPos.SVenta,
+                                                pPos.Clase AS IdClase,
+                                                clases.Nombre AS Clase,
+                                                p.ImgName,
+                                                IFNULL(CoorPages.Pag, '') AS Pagina,
+                                                IFNULL(CoorPages.xPosition, '') AS CoordenadaX,
+                                                IFNULL(CoorPages.yPosition, '') AS CoordenadaY,
+                                                p.Nota,
+                                                p.Detalle,
+                                                p.Grupo,
+                                                IFNULL(des.Porcentaje, '') AS DesPorcentaje,
+                                                IFNULL(des.APartirDe, '') AS DesApartirDe,
+                                                IFNULL(e.TotalEntrada, 0) - IFNULL(s.TotalSalida, 0) AS Cantidad
+                                            FROM
+                                                BD_Pos.productos AS pPos
+                                            LEFT JOIN
+                                                programaembd.productos AS p ON pPos.Cod = p.Cod
+                                            LEFT JOIN
+                                                programaembd.CoordinatesPages AS CoorPages ON pPos.Consecutivo = CoorPages.Consecutive
+                                            LEFT JOIN
+                                                programaembd.proovedores AS prov ON p.CodProovedor = prov.Cod
+                                            LEFT JOIN 
+                                                programaembd.subcategorias AS SubCat ON p.SubCategoria = SubCat.IDSubCategoria
+                                            LEFT JOIN
+                                                programaembd.categoria AS Cat ON SubCat.IDCategoria = Cat.IDCategoria
+                                            LEFT JOIN
+                                                BD_Pos.clases AS clases ON clases.Id = pPos.Clase
+                                            LEFT JOIN
+                                            programaembd.descuentos AS des ON des.Cod = p.Cod
+                                            -- Subconsulta para entradas
+                                                                LEFT JOIN (
+                                                                    SELECT
+                                                Codigo,
+                                                SUM(Cantidad) AS TotalEntrada
+                                                                    FROM
+                                                programaembd.entradas
+                                                                    GROUP BY
+                                                Codigo
+                                                                ) AS e ON e.Codigo = p.Cod
 
-                                                -- Subconsulta para entradas
-                                                LEFT JOIN (
-                                                    SELECT Codigo, SUM(Cantidad) AS TotalEntrada
-                                                    FROM entradas
-                                                    GROUP BY Codigo
-                                                ) AS e ON e.Codigo = p.Cod
-
-                                                -- Subconsulta para salidas
-                                                LEFT JOIN (
-                                                    SELECT Codigo, SUM(Cantidad) AS TotalSalida
-                                                    FROM salidas
-                                                    GROUP BY Codigo
-                                                ) AS s ON s.Codigo = p.Cod`)
+                                                                -- Subconsulta para salidas
+                                                                LEFT JOIN (
+                                                                    SELECT 
+                                                Codigo,
+                                                SUM(Cantidad) AS TotalSalida
+                                                                    FROM
+                                                programaembd.salidas
+                                                                    GROUP BY Codigo
+                                                                ) AS s ON s.Codigo = p.Cod
+                                            WHERE
+                                            pPos.SVenta = '1'`)
         res.json(rows)
         connection.end()
     } catch (error) {
         console.log('Error-postOtherSupplier: ', error)
+    }
+};
+
+export const CoordinatesPagesList = async(req,res)=>{
+    try {
+        const connection = await connect()
+        const [rows] = await connection.query(`SELECT
+                                                    Consecutive,
+                                                    Cod,
+                                                    Pag,
+                                                    xPosition,
+                                                    yPosition
+                                                FROM
+                                                    CoordinatesPages`)
+        res.json(rows)
+        connection.end()
+    } catch (error) {
+        console.log('Error-CoordinatesPagesList: ', error)
     }
 };
 
@@ -1175,6 +1404,7 @@ export const getSupplierList = async(req,res)=>{
 export const postNewPurchase = async(req,res)=>{
     const connection = await connect()
     try {
+        await connection.beginTransaction(); //INICIA LA TRANSACCIÓN
         const [consecutivo] = await connection.query(`SELECT
                                                             MAX(Consecutivo)+1 As Con
                                                         FROM
@@ -1284,12 +1514,95 @@ export const postNewPurchase = async(req,res)=>{
                                                 req.body.CodSupplier,
                                                 req.body.Total
                                             ]
+            console.log('req.body.Total', req.body.Total)
             await connection.execute(NewNewPurchasePass, NewNewPurchasePassValues);
         }
+        await connection.commit(); //GUARDA TODO SI NADA FALLÓ
         res.status(200).json({sucess: true, error: '', Consecutivo: consecutivo[0].Con})
     } catch (error) {
+        await connection.rollback(); //DESHACE TODO LO QUE SE INSERTÓ
         console.log('Error-postNewPurchase: ', error)
         res.status(500).json({sucess: false, error: error});
+    } finally {
+        connection.end();
+    }
+};
+
+export const postUpdatePurchase = async(req,res)=>{
+    const connection = await connect()
+    try {
+        const PurchasingHeader = `UPDATE
+                                    cabeceracompras SET
+                                        NFactura = ?,
+                                        CodProveedor = ?,
+                                        Fecha = ?,
+                                        FechaFactura = ?,
+                                        FechaVencimiento = ?,
+                                        Dias = ?,
+                                        Iva = ?,
+                                        RTF = ?,
+                                        CodResponsable = ?,
+                                        ContadoCredito = ?
+                                    WHERE
+                                        Consecutivo = ?`
+        const PurchasingHeaderValue = [
+                                    req.body.Nfactura,
+                                    req.body.CodSupplier,
+                                    req.body.Date,
+                                    req.body.InvoiceDate,
+                                    req.body.ExpirationDate,
+                                    req.body.CreditDays,
+                                    req.body.Iva? 1: 0,
+                                    req.body.Retefuente,
+                                    req.body.ResponsibleCode,
+                                    req.body.ContadoOCredito,
+                                    req.body.Consecutive
+                                    ]
+        await connection.execute(PurchasingHeader, PurchasingHeaderValue);
+        //Delete the data from entradas
+        const DeleteEntranse = `DELETE FROM entradas WHERE Consecutivo = ?`
+        const DeleteEntranseValues = [req.body.Consecutive]
+        await connection.execute(DeleteEntranse, DeleteEntranseValues);
+
+        if (req.body.PurchaseEntranseL.length > 0) {
+            const EntranseList = `INSERT INTO
+                    entradas (
+                                Consecutivo,
+                                CodProveedor,
+                                Proveedor,
+                                Cantidad,
+                                Codigo,
+                                Descripción,
+                                Costo,
+                                CostoLP,
+                                Fecha,
+                                IVA,
+                                CodResponsable,
+                                Responsable
+                            )
+                VALUES ${req.body.PurchaseEntranseL.map(() => '(?,?,?,?,?,?,?,?,?,?,?,?)').join(', ')}
+            `;
+    
+            const EntranseListValues = req.body.PurchaseEntranseL.flatMap(product => [
+                req.body.Consecutive,
+                req.body.CodSupplier,
+                req.body.Supplier,
+                product.Cantidad,
+                product.Codigo,
+                product.Descripcion,
+                product.UIva,
+                product.CostoLP,
+                req.body.Date,
+                product.TotalIva,
+                req.body.ResponsibleCode,
+                req.body.ContadoOCredito
+            ]);
+            await connection.execute(EntranseList, EntranseListValues);
+        }
+        res.status(200).json({sucess: true, error: ''})
+    } catch (error) {
+        console.log('Error-postNewPurchase: ', error)
+        res.status(500).json({sucess: false, error: error.message});
     } finally {
         connection.end();
     }
@@ -1385,6 +1698,7 @@ export const getPPPurchase = async(req,res)=>{
     try {
         const connection = await connect()
         let PurchasePP = `SELECT
+                                ac.Consecutivo,
                                 ac.RC,
                                 ac.Fecha,
                                 ac.Abono
@@ -1394,6 +1708,7 @@ export const getPPPurchase = async(req,res)=>{
                                 ac.Consecutivo = ?`
         if (req.body.type === 'Ventas') {
             PurchasePP = `SELECT
+                            av.Consecutivo,
                             av.RC,
                             av.Fecha,
                             av.Abono
@@ -1413,25 +1728,73 @@ export const getPPPurchase = async(req,res)=>{
 export const postMakePP = async(req,res)=>{
     const connection = await connect()
     try {
-        const consecutivo = await connection.query(`INSERT INTO
-                                                        abonoscompras
-                                                        (
-                                                        Consecutivo,
-                                                        RC,
-                                                        Fecha,
-                                                        CodProveedor,
-                                                        Abono
-                                                        )
-                                                    VALUES
-                                                        (?,?,?,?,?)`,
-                                                        [
-                                                        req.body.Consecutivo,
-                                                        req.body.RC,
-                                                        req.body.Fecha,
-                                                        req.body.CodProveedor,
-                                                        req.body.Abono
-                                                        ])
-        
+        let MakePP = `INSERT INTO
+                            abonoscompras
+                            (
+                            Consecutivo,
+                            RC,
+                            Fecha,
+                            CodProveedor,
+                            Abono
+                            )
+                        VALUES
+                            (?,?,?,?,?)`
+        let Values = [
+                        req.body.Consecutivo,
+                        req.body.RC,
+                        req.body.Fecha,
+                        req.body.CodProveedor,
+                        req.body.Abono
+                        ]
+        if (req.body.type === 'Ventas') {
+            MakePP = `INSERT INTO
+                                    abonosventas
+                                    (
+                                    Consecutivo,
+                                    RC,
+                                    Fecha,
+                                    Abono
+                                    )
+                                VALUES
+                                    (?,?,?,?)`
+            Values = [
+                        req.body.NDePedido,
+                        req.body.RC,
+                        req.body.Fecha,
+                        req.body.Abono
+                    ]
+        }
+        await connection.execute(MakePP, Values)
+        res.status(200).json({sucess: true, error: ''})
+    } catch (error) {
+        console.log('Error-postMakePP: ', error)
+        res.status(500).json({sucess: false, error: error});
+    } finally {
+        connection.end();
+    }
+};
+
+export const postDeletePP = async(req,res)=>{
+    const connection = await connect()
+    try {
+        let deletePP = `DELETE FROM
+                            abonoscompras
+                        WHERE
+                            RC = ? and Consecutivo = ?`
+
+        let Values = [req.body.RC,
+                      req.body.Consecutivo
+                     ]
+        if (req.body.type === 'Ventas') {
+            deletePP = `DELETE FROM
+                            abonosventas
+                        WHERE
+                            RC = ? and Consecutivo = ?`
+            Values = [req.body.RC,
+                      req.body.Consecutivo
+                     ]
+        }
+        await connection.execute(deletePP, Values)
         res.status(200).json({sucess: true, error: ''})
     } catch (error) {
         console.log('Error-postMakePP: ', error)
@@ -1450,17 +1813,29 @@ export const getEnteredList = async(req,res)=>{
                                                     (cli.Ferreteria) AS Cliente,
                                                     te.FechaFactura AS FechaOdePedido,
                                                     te.FechaDeEntrega,
-                                                    SUM(ti.Cantidad*ti.VrUnitario) AS Total
+                                                    ROUND(SUM(
+                                                    CASE
+                                                    WHEN
+                                                        ti.Cantidad > ti.APartirDe 
+                                                    THEN
+                                                        ti.Cantidad*ti.VrUnitario * (1- IFNULL(cu.Porcentaje,0)/100) * (1 - (ti.Porcentaje/100))
+                                                    ELSE
+                                                        ti.Cantidad*ti.VrUnitario * (1- IFNULL(cu.Porcentaje,0)/100)
+                                                    END),2) AS Total
                                                 FROM
                                                     tabladeestados AS te
                                                 LEFT JOIN
                                                     tabladeingresados AS ti ON ti.NDePedido = te.NDePedido
                                                 LEFT JOIN
                                                     clientes AS cli ON cli.Cod = te.CodCliente
+                                                LEFT JOIN
+                                                    CRedimidos AS cr ON cr.NPedido = te.NDePedido
+                                                LEFT JOIN
+                                                    Cupones AS cu ON cu.Cupon = cr.Cupon
                                                 WHERE
                                                     te.Estado = 'Ingresado'
                                                 GROUP BY
-                                                    te.NDePedido, ti.NDePedido`)
+                                                    te.NDePedido`)
         res.json(rows)
         connection.end()
     } catch (error) {
@@ -1472,51 +1847,91 @@ export const getStatusList = async(req,res)=>{
     try {
         const connection = await connect()
         const [rows] = await connection.query(`SELECT 
-                                                ES.NDePedido,
-                                                ES.CodCliente,
-                                                (clientes.Ferreteria ) AS Cliente,
-                                                ES.FechaFactura,
-                                                (IFNULL(SUM(tabladeingresados.Cantidad*tabladeingresados.VrUnitario),0)) AS Valor,
-                                                ES.TipoDePago,
-                                                ES.Estado,
-                                                (Con.ValorFinal) AS ValorFinal,
-                                                ES.FechaDeEstado,
-                                                ES.FechaDeEntrega,
-                                                ES.ProcesoDelPedido,
-                                                ES.CodColaborador,
-                                                ES.TieneIva,
-                                                ES.FechaVencimiento,
-                                                ES.Repartidor,
-                                                IFNULL(col.Nombre,'') AS NombreRepartidor,
-                                                ES.NotaVenta,
-                                                ES.NotaEntrega,
-                                                ES.VECommerce,
-                                                IFNULL(fElect.Prefijo,'') AS Prefijo,
-                                                IFNULL(fElect.FacturaElectronica, '') AS FacturaElectronica
-                                            FROM
-                                                tabladeestados AS ES
-                                            CROSS JOIN
-                                                clientes ON clientes.Cod = ES.CodCliente
-                                            CROSS JOIN
-                                                tabladeingresados ON tabladeingresados.NDePedido = ES.NDePedido
-                                            CROSS JOIN
-                                                (SELECT ES.NDePedido,
-                                                (IFNULL(SUM(salidas.Cantidad*salidas.VrUnitario),0)) AS ValorFinal
-                                                FROM
-                                                tabladeestados AS ES
-                                                LEFT JOIN
-                                                salidas ON salidas.NDePedido = ES.NDePedido
-                                                GROUP BY
-                                                ES.NDePedido
-                                                ORDER BY ES.NDePedido DESC) AS Con ON Con.NDePedido = ES.NDePedido
-                                        LEFT JOIN 
-                                                felectronica AS fElect ON ES.NDePedido = fElect.NFactura
-                                        LEFT JOIN
-                                            colaboradores AS col ON col.Cod = ES.Repartidor
-                                            GROUP BY
-                                                ES.NDePedido,
-                                                tabladeingresados.NDePedido
-                                            ORDER BY ES.NDePedido DESC`)
+                                                    ES.NDePedido,
+                                                    ES.CodCliente,
+                                                    cli.Ferreteria AS Cliente,
+                                                    ES.FechaFactura,
+
+                                                    IFNULL(ROUND(TI.Valor,2),0) AS Valor,
+
+                                                    ES.TipoDePago,
+                                                    ES.Estado,
+
+                                                    IFNULL(ROUND(SA.ValorFinal,2),0) AS ValorFinal,
+
+                                                    ES.FechaDeEstado,
+                                                    ES.FechaDeEntrega,
+                                                    ES.ProcesoDelPedido,
+                                                    ES.CodColaborador,
+                                                    ES.TieneIva,
+                                                    ES.FechaVencimiento,
+                                                    ES.Repartidor,
+                                                    IFNULL(col.Nombre,'') AS NombreRepartidor,
+                                                    ES.NotaVenta,
+                                                    ES.NotaEntrega,
+                                                    ES.VECommerce,
+                                                    IFNULL(fElect.Prefijo,'') AS Prefijo,
+                                                    IFNULL(fElect.FacturaElectronica,'') AS FacturaElectronica
+                                                FROM tabladeestados ES
+
+                                                LEFT JOIN clientes cli 
+                                                    ON cli.Cod = ES.CodCliente
+
+                                                LEFT JOIN colaboradores col 
+                                                    ON col.Cod = ES.Repartidor
+
+                                                LEFT JOIN felectronica fElect 
+                                                    ON fElect.NFactura = ES.NDePedido
+
+                                                /* ===== SUBCONSULTA: VALOR (INGRESADOS) ===== */
+                                                LEFT JOIN (
+                                                    SELECT
+                                                        ti.NDePedido,
+                                                        IFNULL(SUM(
+                                                            CASE 
+                                                                WHEN ti.Cantidad > ti.APartirDe THEN
+                                                                    ti.Cantidad * ti.VrUnitario
+                                                                    * (1 - IFNULL(cu.Porcentaje,0)/100)
+                                                                    * (1 - IFNULL(ti.Porcentaje,0)/100)
+                                                                ELSE
+                                                                    ti.Cantidad * ti.VrUnitario
+                                                                    * (1 - IFNULL(cu.Porcentaje,0)/100)
+                                                            END
+                                                        ),0) AS Valor
+                                                    FROM tabladeingresados ti
+                                                    LEFT JOIN CRedimidos cr 
+                                                        ON cr.NPedido = ti.NDePedido
+                                                    LEFT JOIN Cupones cu 
+                                                        ON cu.Cupon = cr.Cupon
+                                                    GROUP BY ti.NDePedido
+                                                ) TI 
+                                                    ON TI.NDePedido = ES.NDePedido
+
+                                                /* ===== SUBCONSULTA: VALOR FINAL (SALIDAS) ===== */
+                                                LEFT JOIN (
+                                                    SELECT
+                                                        sa.NDePedido,
+                                                        IFNULL(SUM(
+                                                            CASE 
+                                                                WHEN sa.Cantidad > sa.APartirDe THEN
+                                                                    sa.Cantidad * sa.VrUnitario
+                                                                    * (1 - IFNULL(cu.Porcentaje,0)/100)
+                                                                    * (1 - IFNULL(sa.Porcentaje,0)/100)
+                                                                ELSE
+                                                                    sa.Cantidad * sa.VrUnitario
+                                                                    * (1 - IFNULL(cu.Porcentaje,0)/100)
+                                                            END
+                                                        ),0) AS ValorFinal
+                                                    FROM salidas sa
+                                                    LEFT JOIN CRedimidos cr 
+                                                        ON cr.NPedido = sa.NDePedido
+                                                    LEFT JOIN Cupones cu 
+                                                        ON cu.Cupon = cr.Cupon
+                                                    GROUP BY sa.NDePedido
+                                                ) SA 
+                                                    ON SA.NDePedido = ES.NDePedido
+
+                                                ORDER BY ES.NDePedido DESC`)
         res.json(rows)
         connection.end()
     } catch (error) {
@@ -1532,15 +1947,29 @@ export const getPPSales = async(req,res)=>{
                                                     te.FechaFactura,
                                                     te.CodCliente,
                                                     cli.Ferreteria,
+                                                    cli.Contacto,
+                                                    cli.Telefono,
+                                                    cli.Cel,
                                                     te.TipoDePago,
                                                     te.FechaVencimiento,
-                                                    SUM(sa.Cantidad * sa.VrUnitario) AS Total
+                                                    IFNULL(ROUND(SUM(
+                                                    CASE WHEN
+                                                        sa.Cantidad > sa.APartirDe
+                                                    THEN
+                                                        sa.Cantidad * sa.VrUnitario * (1- IFNULL(cu.Porcentaje,0)/100) * (1 - IFNULL(sa.Porcentaje,0)/100)
+                                                    ELSE
+                                                        sa.Cantidad * sa.VrUnitario * (1- IFNULL(cu.Porcentaje,0)/100)
+                                                    END),2),0) AS Total
                                                 FROM
                                                     tabladeestados AS te
                                                 LEFT JOIN
                                                     clientes AS cli ON cli.Cod = te.CodCliente
                                                 LEFT JOIN
                                                     salidas AS sa ON sa.NDePedido = te.NDePedido
+                                                LEFT JOIN
+                                                    CRedimidos AS cr ON cr.NPedido = te.NDePedido
+                                                LEFT JOIN
+                                                    Cupones AS cu ON cu.Cupon = cr.Cupon
                                                 WHERE
                                                     te.Estado = 'Cerrado'
                                                 GROUP BY
@@ -1559,7 +1988,7 @@ export const getPPSalesBalances = async(req,res)=>{
         const connection = await connect()
         const [rows] = await connection.query(`SELECT
                                                     ab.Consecutivo AS NDePedido,
-                                                    IFNULL(SUM(ab.Abono),0) AS Saldo
+                                                    IFNULL(ROUND(SUM(ab.Abono),2),0) AS Saldo
                                                 FROM
                                                     abonosventas AS ab
                                                 GROUP BY 
@@ -1569,7 +1998,7 @@ export const getPPSalesBalances = async(req,res)=>{
         res.json(rows)
         connection.end()
     } catch (error) {
-        console.log('Error-getPPPurchase: ', error)
+        console.log('Error-getPPSalesBalances: ', error)
     }
 };
 
@@ -1599,14 +2028,14 @@ export const getCreditNotes = async(req,res)=>{
         res.json(rows)
         connection.end()
     } catch (error) {
-        console.log('Error-getPPPurchase: ', error)
+        console.log('Error-getCreditNotes: ', error)
     }
 };
 
 export const getPreparationList = async(req,res)=>{
-    
     try {
         const connection = await connect()
+        const orderList = req.body.NPedidoList.join(',');
         const [rows] = await connection.query(`SELECT
                                                     ti.NDePedido,
                                                     te.CodCliente,
@@ -1618,8 +2047,10 @@ export const getPreparationList = async(req,res)=>{
                                                     pro.Ubicación,
                                                     te.FechaDeEntrega,
                                                     prov.Proovedor AS Proveedor,
-                                                    movs.Cantidad,
-                                                    movs.Disponible
+                                                    ti.Cantidad,
+                                                    movs.Disponible,
+                                                    ti.Porcentaje,
+                                                    ti.APartirDe
                                                 FROM tabladeingresados AS ti
                                                 LEFT JOIN productos AS pro ON ti.Codigo = pro.Cod
                                                 LEFT JOIN proovedores as prov On prov.Cod = pro.CodProovedor
@@ -1651,7 +2082,7 @@ export const getPreparationList = async(req,res)=>{
                                                     ) AS movimientos
                                                     GROUP BY Codigo
                                                 ) AS movs ON movs.Codigo = ti.Codigo
-                                                WHERE ti.NDePedido IN (?)`,[req.body.NPedidoList])
+                                                WHERE ti.NDePedido IN (?) ORDER BY FIELD(ti.NDePedido, ${orderList})`,[req.body.NPedidoList])
         res.json(rows)
         connection.end()
     } catch (error) {
@@ -1662,7 +2093,8 @@ export const getPreparationList = async(req,res)=>{
 export const postStateFlow = async(req,res)=>{
     const connection = await connect()
     try {
-        const placeholders = req.body.FlowData.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+        await connection.beginTransaction(); //INICIA LA TRANSACCIÓN
+        const placeholders = req.body.FlowData.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
         const NewFlujoDeEstados = `INSERT INTO flujodeestados (
                                                             NDePedido,
                                                             Cantidad,
@@ -1670,7 +2102,9 @@ export const postStateFlow = async(req,res)=>{
                                                             VrUnitario,
                                                             Costo,
                                                             Hora,
-                                                            Incompleto
+                                                            Incompleto,
+                                                            Porcentaje,
+                                                            APartirDe
                                                             )
                                                 VALUES ${placeholders}`
         const NewFlujoDeEstadosValues = req.body.FlowData.flat();
@@ -1684,8 +2118,10 @@ export const postStateFlow = async(req,res)=>{
                                 `;
         const UpdateStatesValues = [req.body.Date + ' ' + req.body.Hour, ...req.body.NpedidoList]
         await connection.execute(UpdateStates, UpdateStatesValues);
+        await connection.commit(); // GUARDA TODO SI NADA FALLÓ
         res.status(200).json({sucess: true, error: ''})
     } catch (error) {
+        await connection.rollback(); //DESHACE TODO LO QUE SE INSERTÓ
         console.log('Error-postStateFlow: ', error)
         res.status(500).json({sucess: false, error: error});
     } finally {
@@ -1698,10 +2134,12 @@ export const getPendingList = async(req,res)=>{
     try {
         const connection = await connect()
         const [rows] = await connection.query(`SELECT
+                                                ROW_NUMBER() OVER (ORDER BY flu.Codigo)-1 AS indice,
                                                 flu.cantidad,
                                                 flu.Codigo,
                                                 p.Descripcion,
                                                 p.PCosto,
+                                                p.Iva,
                                                 cli.Ferreteria,
                                                 pro.cod AS CodPro,
                                                 pro.Proovedor,
@@ -1757,12 +2195,13 @@ export const getSpecificPurchase = async(req,res)=>{
                                                 en.Codigo,
                                                 en.Descripción AS Descripcion,
                                                 en.Costo - en.Iva AS Costo,
-                                                CEIL((en.IVA/ (en.Costo - en.Iva)) * 100) AS Iva,
+                                                pro.Iva AS Iva,
                                                 en.Costo AS UIva,
                                                 en.Cantidad *(en.Costo) AS Total,
                                                 en.CostoLP
                                             FROM
                                                 entradas AS en
+                                                LEFT JOIN productos AS pro ON pro.Cod = en.Codigo
                                             WHERE
                                                 en.Consecutivo = ?`,[req.body.Consecutivo])
         res.json(rows)
@@ -1807,6 +2246,22 @@ export const postNewAlias = async(req,res)=>{
     }
 };
 
+export const postDeleteAlias = async(req,res)=>{
+    const connection = await connect()
+    try {
+        const newAlias = `DELETE FROM alias WHERE Cod = ? AND Alias = ?`
+        const newAliasValues = [req.body.Cod, req.body.Alias];
+        
+        await connection.execute(newAlias, newAliasValues);
+        res.status(200).json({sucess: true, error: ''})
+    } catch (error) {
+        console.log('Error-postDeleteAlias: ', error)
+        res.status(500).json({sucess: false, error: error});
+    } finally {
+        connection.end();
+    }
+};
+//!Verify
 export const getOrderHeader = async(req,res)=>{
     try {
         const connection = await connect()
@@ -1833,13 +2288,18 @@ export const getOrderHeader = async(req,res)=>{
                                                     te.TieneIva,
                                                     te.NotaVenta,
                                                     te.NotaEntrega,
-                                                    te.VECommerce
+                                                    te.VECommerce,
+                                                    IFNULL(cu.Porcentaje,0) AS CuPorcentaje
                                                 FROM
                                                     tabladeestados AS te
                                                 LEFT JOIN
                                                     clientes AS cli ON te.CodCliente = cli.Cod
                                                 LEFT JOIN
                                                     colaboradores AS col ON te.CodColaborador = col.Cod
+                                                LEFT JOIN
+                                                    CRedimidos AS cr ON cr.NPedido = te.NDePedido
+                                                LEFT JOIN
+                                                    Cupones AS cu ON cu.Cupon = cr.Cupon
                                                 WHERE
                                                     te.NDePedido = ?`, [req.body.NDePedido])
         res.json(rows)
@@ -1860,7 +2320,9 @@ export const getOrderDetail = async(req,res)=>{
                         pro.Descripcion,
                         ti.VrUnitario,
                         ti.Costo,
-                        pro.Iva
+                        pro.Iva,
+                        ti.ApartirDe AS DesApartirDe,
+                        ti.Porcentaje AS DesPorcentaje
                     FROM
                         tabladeingresados AS ti
                     LEFT JOIN
@@ -1871,9 +2333,12 @@ export const getOrderDetail = async(req,res)=>{
             query = `SELECT
                         sa.Cantidad,
                         sa.Codigo,
-                        sa.Descipcion,
+                        sa.Descipción AS Descripcion,
                         sa.VrUnitario,
-                        sa.Costo
+                        sa.Costo,
+                        sa.TieneIVA as Iva,
+                        sa.ApartirDe AS DesApartirDe,
+                        sa.Porcentaje AS DesPorcentaje
                     FROM
                         salidas AS sa
                     WHERE
@@ -1890,6 +2355,8 @@ export const getOrderDetail = async(req,res)=>{
                         subc.SubCategoria,
                         pro.CodProovedor AS CodProveedor,
                         prov.Proovedor AS Proveedor,
+                        flu.ApartirDe AS DesApartirDe,
+                        flu.Porcentaje AS DesPorcentaje,
                         flu.Incompleto AS Estado
                     FROM
                         flujodeestados AS flu
@@ -1914,7 +2381,7 @@ export const getOrderDetail = async(req,res)=>{
 export const updateOrder = async(req,res)=>{
     const connection = await connect()
     try {
-        console.log(req.body)
+        await connection.beginTransaction(); //INICIA LA TRANSACCIÓN
         if (req.body.Estado === 'Ingresado'){
             const deleteData = await connection.query(`
                 DELETE FROM
@@ -1925,14 +2392,16 @@ export const updateOrder = async(req,res)=>{
             const query = `INSERT INTO
                         tabladeingresados
                     VALUES
-                        ${req.body.Order.map(() => '(?,?,?,?,?)').join(', ')}
+                        ${req.body.Order.map(() => '(?,?,?,?,?,?,?)').join(', ')}
                     `
             const data = req.body.Order.flatMap(product => [
                 req.body.NDePedido,
                 product.Cantidad,
                 product.Codigo,
                 product.VrUnitario,
-                product.Costo
+                product.Costo,
+                product.DesPorcentaje,
+                product.DesApartirDe,
             ]);
             const ActualizarEstado = await connection.query(`UPDATE
                                                                     tabladeestados
@@ -1959,7 +2428,7 @@ export const updateOrder = async(req,res)=>{
             const query = `INSERT INTO
                             flujodeestados
                         VALUES
-                            ${req.body.Order.map(() => '(?,?,?,?,?,?,?)').join(', ')}
+                            ${req.body.Order.map(() => '(?,?,?,?,?,?,?,?,?)').join(', ')}
                         `
             const data = req.body.Order.flatMap(product => [
                 req.body.NDePedido,
@@ -1968,7 +2437,9 @@ export const updateOrder = async(req,res)=>{
                 product.VrUnitario,
                 product.Costo,
                 req.body.Hora,
-                product.Estado
+                product.Estado,
+                product.DesPorcentaje,
+                product.DesApartirDe
             ]);
             const [ActualizarEstado] = await connection.query(`UPDATE
                                                                     tabladeestados
@@ -1989,10 +2460,12 @@ export const updateOrder = async(req,res)=>{
             const [rows] = await connection.query(query, data)
             res.status(200).json({sucess: true, error: ''})
         }
+        await connection.commit(); // GUARDA TODO SI NADA FALLÓ
         connection.end()
     } catch (error) {
+        await connection.rollback(); //DESHACE TODO LO QUE SE INSERTÓ
         console.log('Error-updateOrder: ', error)
-        res.status(500).json({sucess: false, error: error})
+        res.status(500).json({sucess: false, error: error.message})
     } finally {
         connection.end();
     }
@@ -2001,10 +2474,11 @@ export const updateOrder = async(req,res)=>{
 export const postCloseOrder = async(req,res)=>{
     const connection = await connect()
     try {
+        await connection.beginTransaction(); //INICIA LA TRANSACCIÓN
         //Introduce the data into the table salidas
         const EnvioASalidas = `INSERT INTO
                                     salidas
-                                VALUES ${req.body.Order.map(() => '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').join(', ')}
+                                VALUES ${req.body.Order.map(() => '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').join(', ')}
                                 `
         const EnvioASalidasData = req.body.Order.flatMap(product => [
                                                         req.body.NDePedido,
@@ -2024,7 +2498,9 @@ export const postCloseOrder = async(req,res)=>{
                                                         req.body.FechaDeIngreso,
                                                         product.Iva,
                                                         req.body.CodResponsable,
-                                                        req.body.Responsable
+                                                        req.body.Responsable,
+                                                        product.DesPorcentaje,
+                                                        product.DesApartirDe
                                                     ]);
         const [rows] = await connection.query(EnvioASalidas, EnvioASalidasData)
         //updte the table tabladeestados
@@ -2087,9 +2563,10 @@ export const postCloseOrder = async(req,res)=>{
                                                             WHERE
                                                                 NDePedido = ?`, [req.body.NDePedido])
 
-
+        await connection.commit(); // GUARDA TODO SI NADA FALLÓ
         res.status(200).json({sucess: true, error: ''})
     } catch (error) {
+        await connection.rollback(); //DESHACE TODO LO QUE SE INSERTÓ
         console.log('Error-updateOrder: ', error)
         res.status(500).json({sucess: false, error: error})
     } finally {
@@ -2190,6 +2667,7 @@ export const getWeekly = async(req,res)=>{
         res.json(EnvioASalidasData);
         
     } catch (error) {
+        
         console.log('Error-updateOrder: ', error)
         res.status(500).json({sucess: false, error: error})
     } finally {
@@ -2201,12 +2679,12 @@ export const getWeekly = async(req,res)=>{
 export const postNewSale = async(req,res)=>{
     const connection = await connect()
     try {
+        await connection.beginTransaction(); //INICIA LA TRANSACCIÓN
         //Introduce the data into the table salidas
         const [consecutivo] = await connection.query(`SELECT
                                                             MAX(NDePedido)+1 As Con
                                                         FROM
                                                             tabladeestados`)
-        console.log('consecutivo[0].Con', consecutivo[0].Con)
         const [HeaderSale] = await connection.query(`
             INSERT INTO tabladeestados VALUES (
                 ?,
@@ -2243,9 +2721,11 @@ export const postNewSale = async(req,res)=>{
                                 Cantidad,
                                 Codigo,
                                 VrUnitario,
-                                Costo
+                                Costo,
+                                Porcentaje,
+                                APartirDe
                             )
-                VALUES ${req.body.List.map(() => '(?,?,?,?,?)').join(', ')}
+                VALUES ${req.body.List.map(() => '(?,?,?,?,?,?,?)').join(', ')}
             `;
     
             const EntranseListValues = req.body.List.flatMap(product => [
@@ -2253,14 +2733,219 @@ export const postNewSale = async(req,res)=>{
                 product.Cantidad,
                 product.Codigo,
                 product.VrUnitario,
-                product.Costo
+                product.Costo,
+                product.Porcentaje,
+                product.ApartirDe
             ]);
             await connection.execute(EntranseList, EntranseListValues);
         }
+        await connection.commit(); // GUARDA TODO SI NADA FALLÓ
         res.status(200).json({sucess: true, error: consecutivo[0].Con})
     } catch (error) {
+        await connection.rollback(); //DESHACE TODO LO QUE SE INSERTÓ
         console.log('Error-postNewSale: ', error)
+        res.status(500).json({sucess: false, error: error.message})
+    } finally {
+        connection.end();
+    }
+};
+
+export const postAllowed = async(req,res)=>{
+    const connection = await connect()
+    try {
+        //Introduce the data into the table salidas
+        const [consecutivo] = await connection.query(`SELECT
+                                                        CASE
+                                                            WHEN EXISTS (
+                                                                SELECT 1
+                                                                FROM PermisosUsuarios AS p
+                                                                WHERE p.IdUsuario = ? AND p.PermisoId = ?
+                                                            ) THEN 1
+                                                            ELSE 0
+                                                        END AS TienePermiso;`,[req.body.UserId, req.body.PermisoId])
+        res.status(200).json({sucess: true, error: consecutivo[0].TienePermiso})
+    } catch (error) {
+        console.log('Error-postAllowed: ', error)
         res.status(500).json({sucess: false, error: JSON.stringify(error)})
+    } finally {
+        connection.end();
+    }
+};
+
+export const postAllowedList = async(req,res)=>{
+    const connection = await connect()
+    try {
+        console.log(req.body)
+        //Introduce the data into the table salidas
+        const [consecutivo] = await connection.query(`SELECT 
+                                                        p.Id AS Permiso_id,
+                                                        p.NombrePermiso AS Nombre_del_permiso,
+                                                        CASE WHEN up.PermisoId IS NULL THEN FALSE ELSE TRUE END AS TienePermiso
+                                                    FROM
+                                                        Permisos AS p
+                                                    LEFT JOIN
+                                                        PermisosUsuarios AS up 
+                                                        ON p.Id = up.PermisoId AND up.IdUsuario = ?`,[req.body.UserID])
+        res.status(200).json(consecutivo)
+    } catch (error) {
+        console.log('Error-postAllowedList: ', error)
+        res.status(500).json({sucess: false, error: JSON.stringify(error)})
+    } finally {
+        connection.end();
+    }
+};
+
+export const postChangePassword = async(req, res) =>{
+    const connection = await connect()
+    try {
+        // To hash the new password
+        const plainPassword = req.body.NewPassword;
+        const hashedPassword = await new Promise((resolve, reject) => {
+            bcrypt.hash(plainPassword, 10, function (err, hashedPassword) {
+            if (err) {
+                reject(err);
+            } else {
+                resolve(hashedPassword);
+            }
+            });
+        });
+        const [upRows] = await connection.query("UPDATE colaboradores SET Contraseña = ? WHERE Cod =  ?", [hashedPassword, req.body.CodUser]);
+        //res.json(upRows);
+        res.status(200).json({sucess: true, error: ''})
+    } catch (error) {
+        console.log('Error-postChangePassword: ', error)
+        res.status(500).json({sucess: false, error: JSON.stringify(error)})
+    } finally {
+        connection.end();
+    }
+}
+
+export const postChangePermits = async(req,res)=>{
+    const connection = await connect()
+    try {
+        //Introduce the data into the table salidas
+        const [consecutivo] = await connection.query(`DELETE FROM PermisosUsuarios WHERE IdUsuario = ?;`,[req.body.IdUsuario])
+        if (req.body.permList.length > 0) {
+            const ingresoQuery = `
+            INSERT INTO
+                PermisosUsuarios (
+                            IdUsuario,
+                            PermisoId
+                        )
+            VALUES ${req.body.permList.map(() => '(?,?)').join(', ')}
+            `;
+            const PermitValues = req.body.permList.flatMap(product => [
+                product.IdUsuario,
+                product.PermisoId
+            ]);
+            await connection.execute(ingresoQuery, PermitValues);
+        }
+        res.status(200).json({sucess: true, error: ''})
+    } catch (error) {
+        console.log('Error-postAllowedList: ', error)
+        res.status(500).json({sucess: false, error: JSON.stringify(error)})
+    } finally {
+        connection.end();
+    }
+};
+
+export const postNewWorker = async(req,res)=>{
+    const connection = await connect()
+    try {
+        //Introduce the data into the table salidas
+
+        const plainPassword = req.body.Contraseña;
+        const hashedPassword = await new Promise((resolve, reject) => {
+            bcrypt.hash(plainPassword, 10, function (err, hashedPassword) {
+            if (err) {
+                reject(err);
+            } else {
+                resolve(hashedPassword);
+            }
+            });
+        });
+        const [consecutivo] = await connection.query(`INSERT INTO
+            colaboradores (
+                        Nombre,
+                        Apellido,
+                        Cargo,
+                        Telefono,
+                        Cel,
+                        Email,
+                        Direccion,
+                        Nota,
+                        Contraseña,
+                        Usuario,
+                        Activo
+                    )
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)`,[req.body.Nombre,
+        req.body.Apellido,
+        req.body.Cargo,
+        req.body.Telefono,
+        req.body.Cel,
+        req.body.Email,
+        req.body.Direccion,
+        req.body.Nota,
+        hashedPassword,
+        req.body.Usuario,
+        1
+        ])
+
+        const [NColaborador] = await connection.query(`SELECT
+                                                            MAX(Cod) AS Con
+                                                        FROM
+                                                            colaboradores`)
+        const permits =  `INSERT INTO
+                            PermisosUsuarios (
+                                        IdUsuario,
+                                        PermisoId
+                                    )
+                        VALUES ${req.body.permit.map(() => '(?,?)').join(', ')}
+                        `
+        const values = req.body.permit.flatMap((item)=>[
+            NColaborador[0].Con,
+            item
+        ])
+        await connection.execute(permits, values);
+        res.status(200).json({sucess: true, error: ''})
+    } catch (error) {
+        console.log('Error-postNewWorker: ', error)
+        res.status(500).json({sucess: false, error: error})
+    } finally {
+        connection.end();
+    }
+};
+
+export const postUpdateWorker = async(req,res)=>{
+    const connection = await connect()
+    try {
+        //Introduce the data into the table salidas
+        const [consecutivo] = await connection.query(`UPDATE colaboradores
+                                                        SET 
+                                                            Nombre = ?,
+                                                            Apellido = ?,
+                                                            Cargo = ?,
+                                                            Telefono = ?,
+                                                            Cel = ?,
+                                                            Email = ?,
+                                                            Direccion = ?,
+                                                            Nota = ?,
+                                                            Usuario = ?
+                                                    WHERE Cod = ?`,[req.body.Nombre,
+                                                                      req.body.Apellido,
+                                                                      req.body.Cargo,
+                                                                      req.body.Telefono,
+                                                                      req.body.Cel,
+                                                                      req.body.Email,
+                                                                      req.body.Direccion,
+                                                                      req.body.Nota,
+                                                                      req.body.Usuario,
+                                                                      req.body.Cod
+                                                                    ])
+        res.status(200).json({sucess: true, error: ''})
+    } catch (error) {
+        console.log('Error-postUpdateWorker: ', error)
+        res.status(500).json({sucess: false, error: error})
     } finally {
         connection.end();
     }
