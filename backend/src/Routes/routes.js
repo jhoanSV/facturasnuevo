@@ -62,6 +62,9 @@ import {getClientList,
         postUpdatePurchase
  } from '../controllers/tasks';
 
+
+console.log('DEBUG postAllowed:', typeof postAllowed);
+console.log('DEBUG postAllowedList:', typeof postAllowedList);
 const router = Router();
 
 router.get('/int/clientlist', getClientList)
