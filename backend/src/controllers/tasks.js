@@ -2754,6 +2754,7 @@ export const postAllowed = async(req,res)=>{
     const connection = await connect()
     try {
         //Introduce the data into the table salidas
+        console.log(req.body)
         const [consecutivo] = await connection.query(`SELECT
                                                         CASE
                                                             WHEN EXISTS (
