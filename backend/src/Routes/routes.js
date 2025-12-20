@@ -49,7 +49,17 @@ import {getClientList,
         postCloseOrder,
         postAnuul,
         getWeekly,
-        postNewSale
+        postNewSale,
+        postAllowed,
+        postAllowedList,
+        postChangePassword,
+        postChangePermits,
+        postNewWorker,
+        postUpdateWorker,
+        postDeleteAlias,
+        CoordinatesPagesList,
+        postDeletePP,
+        postUpdatePurchase
  } from '../controllers/tasks';
 
 const router = Router();
@@ -60,13 +70,17 @@ router.get('/int/advisorslist', getAdvisorsList)
 router.post('/int/newclient', postNewClient)
 router.get('/int/supplierlist', getSupplierList)
 router.get('/int/workerlist', getWorkerList)
+//!Products
 router.get('/int/getproductlist', getProductList)
+router.get('/int/coordinatespageslist', CoordinatesPagesList)
 router.get('/int/categorylist', getCategoryList)
 router.get('/int/claseslist', getClasesList)
 router.post('/int/postupdateproduct', postUpdateProduct)
 router.post('/int/othersupplier', postOtherSupplier)
 router.post('/int/quiantityanddisponible', quiantityAndDisponible)
 router.post('/int/newproduct', postNewProduct)
+
+
 router.post('/int/checklogindata',checkLogInData)
 router.get('/int/quiantityproductList',quiantityProductList)
 router.post('/int/updateclient',postUpdateClient)
@@ -81,9 +95,11 @@ router.post('/int/newsubcategory',postNewSubCategory)
 router.post('/int/updatesubcategory',postUpdateSubCategory)
 router.post('/int/detelesubcategory',postDeteleSubCategory)
 //! Purchase 
-router.get('/int/entrantslist',getEntrantsList)
-router.get('/int/purchaselist',getPurchaseList)
-router.post('/int/newpurchase',postNewPurchase)
+router.get('/int/entrantslist', getEntrantsList)
+router.get('/int/purchaselist', getPurchaseList)
+router.post('/int/newpurchase', postNewPurchase)
+router.post('/int/updatepurchase', postUpdatePurchase)
+router.post('/int/deletepp', postDeletePP)
 
 //!Entered
 router.get('/int/enteredlist',getEnteredList)
@@ -113,6 +129,7 @@ router.post('/int/specificpurchase',getSpecificPurchase)
 //!Alias
 router.post('/int/aliaslist',getAliasList)
 router.post('/int/newalias',postNewAlias)
+router.post('/int/deletelias',postDeleteAlias)
 
 router.post('/int/orderheader',getOrderHeader)
 router.post('/int/getorderdetail',getOrderDetail)
@@ -123,4 +140,13 @@ router.post('/int/anuul',postAnuul)
 
 router.get('/int/weekly',getWeekly)
 
+router.post('/int/allowed',postAllowed)
+router.post('/int/allowedlist', postAllowedList)
+router.post('/int/changepermits', postChangePermits)
+
+router.post('/int/changepassword', postChangePassword)
+
+//!New Worker
+router.post('/int/newworker', postNewWorker)
+router.post('/int/updateworker', postUpdateWorker)
 export default router
