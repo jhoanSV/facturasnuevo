@@ -59,9 +59,13 @@ import {getClientList,
         postDeleteAlias,
         CoordinatesPagesList,
         postDeletePP,
-        postUpdatePurchase
+        postUpdatePurchase,
+        postElectronicInvoive
  } from '../controllers/tasks';
 
+
+console.log('DEBUG postAllowed:', typeof postAllowed);
+console.log('DEBUG postAllowedList:', typeof postAllowedList);
 const router = Router();
 
 router.get('/int/clientlist', getClientList)
@@ -149,4 +153,7 @@ router.post('/int/changepassword', postChangePassword)
 //!New Worker
 router.post('/int/newworker', postNewWorker)
 router.post('/int/updateworker', postUpdateWorker)
+
+//!Coltek
+router.post('/int/electronicinvoive', postElectronicInvoive)
 export default router
