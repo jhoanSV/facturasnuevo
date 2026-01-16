@@ -59,7 +59,8 @@ import {getClientList,
         postDeleteAlias,
         CoordinatesPagesList,
         postDeletePP,
-        postUpdatePurchase
+        postUpdatePurchase,
+        postElectronicInvoive
  } from '../controllers/tasks';
 
 
@@ -152,4 +153,7 @@ router.post('/int/changepassword', postChangePassword)
 //!New Worker
 router.post('/int/newworker', postNewWorker)
 router.post('/int/updateworker', postUpdateWorker)
+
+//!Coltek
+router.post('/int/electronicinvoive', postElectronicInvoive)
 export default router

@@ -61,7 +61,7 @@ export const getRoutesList = async(req,res)=>{
         res.json(rows)
         connection.end()
     } catch (error) {
-        console.log('Error-getClientList: ', error)
+        console.log('Error-getRoutesList: ', error)
     }
 }
 
@@ -2943,6 +2943,47 @@ export const postUpdateWorker = async(req,res)=>{
                                                                       req.body.Usuario,
                                                                       req.body.Cod
                                                                     ])
+        res.status(200).json({sucess: true, error: ''})
+    } catch (error) {
+        console.log('Error-postUpdateWorker: ', error)
+        res.status(500).json({sucess: false, error: error})
+    } finally {
+        connection.end();
+    }
+};
+
+//!Coltek
+const ambiente = 1
+export const postElectronicInvoive = async(req,res)=>{
+    const connection = await connect()
+    try {
+        const [Resolucion] = await connection.query(`SELECT
+                                                            res.NumeroResolucion As Resolucion,
+                                                            res.Prefijo,
+                                                            MAX(fe.FacturaElectronica) + 1 AS UFactura
+                                                        FROM
+                                                            resoluciones AS res
+                                                        JOIN
+                                                            felectronica AS fe
+                                                        WHERE
+                                                            res.IdFerreteria = 0`)
+        const ElectronicData = {
+            "Ambiente": ambiente,
+            "Resolucion": Resolucion[0].Resolucion,
+            "Factura": Resolucion[0].Prefijo + Resolucion[0].UFactura,
+            "Fecha": req.body.Fecha,
+            "Hora": req.body.Hora,
+            "Observacion": "Observacion",
+            "FormaDePago": req.body.FormaDePago,
+            "MedioDePago": '1',
+            "FechaVencimiento": req.body.FechaVencimiento,
+            "CantidadArticulos": req.body.articulos.length,
+            "Cliente": req.body.Cliente,
+            "Articulos": req.body.articulos,
+            "Totales": req.body.Totales,
+            "Impuestos": req.body.Impuestos
+        }
+        console.log(JSON.stringify(ElectronicData, null, 2))
         res.status(200).json({sucess: true, error: ''})
     } catch (error) {
         console.log('Error-postUpdateWorker: ', error)
